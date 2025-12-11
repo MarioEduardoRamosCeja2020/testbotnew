@@ -15,24 +15,33 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(__dirname);
 const { say } = cfonts;
 
-// ===========================
-// FIX Render → evitar readline
-// ===========================
-const isTTY = process.stdout.isTTY;   // ← Render = false
+// ===========================================
+// FIX: evitar error en Render (no hay TTY)
+// ===========================================
+const isTTY = process.stdout.isTTY;
 let rl = null;
 
 if (isTTY) {
   rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 }
 
-// wrapper seguro
+// ===========================================
+// FIX: variable que faltaba
+// ===========================================
+let isRunning = false;
+
+// ===========================================
+// WRAPPER DE PREGUNTAS (modo Render automático)
+// ===========================================
 const question = (texto) => {
   if (!isTTY) {
     console.log(chalk.yellow(`(Render detectado → pregunta omitida: ${texto})`));
 
-    // MODO AUTOMÁTICO EN RENDER
-    if (texto.includes("Seleccione una opción")) return Promise.resolve("1"); // QR
-    if (texto.includes("Escriba su número")) return Promise.resolve("+5210000000000");
+    if (texto.includes("Seleccione una opción"))
+      return Promise.resolve("1"); // QR por defecto
+
+    if (texto.includes("Escriba su número"))
+      return Promise.resolve("+5210000000000");
 
     return Promise.resolve("");
   }
@@ -74,10 +83,31 @@ try {
   console.warn(chalk.hex('#FFA500')('⚠ Error configurando src/tmp:'), err.message);
 }
 
-// … (NO MOVER NADA AQUÍ) …
+// =====================================================
+// FIX: FUNCIONES QUE FALTABAN (TEMPORAL PARA EVITAR ERROR)
+// =====================================================
+
+function verificarCredsJson() {
+  return fsSync.existsSync(join(__dirname, "auth", "creds.json"));
+}
+
+async function verificarOCrearCarpetaAuth() {
+  const dir = join(__dirname, "auth");
+  if (!fsSync.existsSync(dir)) {
+    await fs.mkdir(dir, { recursive: true });
+  }
+}
+
+function formatearNumeroTelefono(num) {
+  return num.replace(/\s+/g, "").trim();
+}
+
+function esNumeroValido(num) {
+  return num.startsWith("+") && num.length > 8;
+}
 
 // =====================================================
-// FUNCIÓN START (ARREGLADA)
+// FUNCIÓN START
 // =====================================================
 
 async function start(file) {
@@ -86,7 +116,7 @@ async function start(file) {
 
   await verificarOCrearCarpetaAuth();
 
-  // Si ya hay creds.json, no preguntar nada
+  // Si ya hay creds.json, no preguntar
   if (verificarCredsJson()) {
     const args = [join(__dirname, file), ...process.argv.slice(2)];
     setupMaster({ exec: args[0], args: args.slice(1) });
@@ -94,9 +124,9 @@ async function start(file) {
     return;
   }
 
-  // ===============================================
-  // Aquí estaban tus preguntas (FIX Render aplicado)
-  // ===============================================
+  // =====================================================
+  // Preguntas (pero Render las resuelve automático)
+  // =====================================================
 
   const opcion = await question(
     chalk.hex('#FFD700').bold('─◉　Seleccione una opción (solo el numero):\n') +
@@ -130,12 +160,14 @@ async function start(file) {
 
   p.on('message', (data) => {
     console.log(chalk.hex('#39FF14').bold('─◉　RECIBIDO:'), data);
+
     switch (data) {
       case 'reset':
-        p.process.kill();
+        try { p.process.kill(); } catch {}
         isRunning = false;
-        start.apply(this, arguments);
+        start(file);
         break;
+
       case 'uptime':
         p.send(process.uptime());
         break;
@@ -145,14 +177,18 @@ async function start(file) {
   p.on('exit', (_, code) => {
     isRunning = false;
     console.error(chalk.hex('#FF1493').bold('[ ERROR ] Ocurrió un error inesperado:'), code);
-    p.process.kill();
+
+    try { p.process.kill(); } catch {}
+
     isRunning = false;
-    start.apply(this, arguments);
+    start(file);
+
     if (process.env.pm_id) process.exit(1);
     else process.exit();
   });
 
   const opts = new Object(yargs(process.argv.slice(2)).exitProcess(false).parse());
+
   if (!opts['test']) {
     if (rl && !rl.listenerCount()) {
       rl.on('line', (line) => {
